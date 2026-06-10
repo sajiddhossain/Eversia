@@ -1,0 +1,9 @@
+{
+  "name": "eversia",
+  "scripts": {
+    "deploy": "cd client && npm run build && cd .. && npx firebase-tools deploy --non-interactive"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.7.0"
+  }
+}

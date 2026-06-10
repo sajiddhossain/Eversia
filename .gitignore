@@ -1,0 +1,50 @@
+# ══════════════════════════════════════════════════════════════
+# EVERSIA — Root .gitignore
+# Security-critical: prevents credential leaks
+# ══════════════════════════════════════════════════════════════
+
+# ── Credenziali & Segreti ──
+service-account.json
+service-account*.json
+*.pem
+*.key
+*.p12
+
+# ── Ambiente ──
+.env
+.env.*
+.env.local
+.env.production
+
+# ── Dati sensibili ──
+data_sample.csv
+*.csv
+
+# ── Firebase ──
+.firebase/
+.firebaserc
+
+# ── Dipendenze ──
+node_modules/
+
+# ── Output di Build ──
+client/dist/
+functions/lib/
+
+# ── Documentazione, Bozze e Script Locali ──
+# docs/
+# scripts/
+# scratch/
+# demo.sh
+scripts/archive/
+
+# ── Editor ──
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# ── Log ──
+*.log
+npm-debug.log*

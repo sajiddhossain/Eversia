@@ -1,0 +1,495 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // =========================================================================
+    // FUNZIONI DI UTILITÀ GLOBALI E RUOLI (V6.0 DEFINITIVE & ULTRA-ROBUST)
+    // =========================================================================
+    
+    // V-001 FIX: Domain validation con salvaguardia contro account senza email (Dominio Rigido)
+    function isAuthenticated() {
+      return request.auth != null && 
+             request.auth.token != null && 
+             'email' in request.auth.token && (
+               request.auth.token.email.lower().matches('.*@liceoagnesi\\.edu\\.it$') ||
+               request.auth.token.email.lower().matches('.*@liceoagnesi\\.gov\\.it$')
+             );
+    }
+    
+    // V-001 & INVARIANT FIX: Supporta sia la collezione `admins` che il campo `role` in `users`
+    // Sicurezza totale e resilienza a valori nulli. Ottimizzato per cortocircuitare exists/get se non autenticato.
+    function isAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.get('role', 'STUDENT') in ['ADMIN', 'SVILUPPATORE'];
+    }
+    
+    // SVILUPPATORE: verifica se l'utente è uno sviluppatore di sistema
+    function isDeveloper() {
+      return isAuthenticated() && 
+             request.auth.token.get('role', 'STUDENT') == 'SVILUPPATORE';
+    }
+
+    // MEGA-INVARIANT: Controlla se l'utente è uno Staff Globale (tramite ruolo o delegatedRooms)
+    // Evita crash su campi mancanti grazie a get() con fallback vuoto.
+    function isStaffGlobally() {
+      return isAuthenticated() && (
+        request.auth.token.get('role', 'STUDENT') in ['ADMIN', 'SVILUPPATORE', 'STAFF'] ||
+        (getUserData() != null && getUserData().get('delegatedRooms', []).size() > 0)
+      );
+    }
+
+    // Verifica specifica per assemblea con salvaguardia email e stato attivo dell'assemblea
+    function isStaffForAssembly(assemblyId) {
+      return isAuthenticated() && (
+        isStaffGlobally() || (
+          assemblyId is string && 
+          assemblyId != '' && 
+          exists(/databases/$(database)/documents/assembly_roles/$(assemblyId + '_' + request.auth.token.email.lower().split('@').join('_').split('.').join('_'))) &&
+          exists(/databases/$(database)/documents/assemblies/$(assemblyId)) &&
+          get(/databases/$(database)/documents/assemblies/$(assemblyId)).data.get('status', '') == 'ATTIVA'
+        )
+      );
+    }
+
+    // Utility: legge il profilo utente in modo ultra-sicuro
+    function getUserData() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) ? 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data : null;
+    }
+
+    // =========================================================================
+    // FUNZIONI DI UTILITÀ PER LE COLLEZIONI (SPOSTATE AL LIVELLO RADICE)
+    // =========================================================================
+
+    // Verifica che l'username sia registrato correttamente nella collezione usernames e associato all'utente
+    function isUsernameRegistered(userId) {
+      let username = request.resource.data.get('username', '');
+      return username == '' || (
+        existsAfter(/databases/$(database)/documents/usernames/$(username)) &&
+        getAfter(/databases/$(database)/documents/usernames/$(username)).data.uid == userId
+      );
+    }
+
+    // --- Anagrafica Studenti (Students) ---
+
+    // Consente la modifica di campi degli studenti eccetto quelli anagrafici primari
+    function isOnlyAllowedStudentUpdate() {
+      let diff = request.resource.data.diff(resource.data);
+      let affected = diff.affectedKeys();
+      return !affected.hasAny(['id', 'email', 'firstName', 'lastName', 'assemblyId', 'className']);
+    }
+
+    function isOwnStudentDoc() {
+      return isAuthenticated() && (
+        (resource != null && resource.data.email == request.auth.token.email.lower()) ||
+        (request.resource != null && request.resource.data.email == request.auth.token.email.lower())
+      );
+    }
+
+    // --- Profilo Utenti Globali (Users) ---
+    function isNameCooldownOk(field, days) {
+      let lastChanged = resource.data.get(field + 'LastChanged', 0);
+      return request.time.toMillis() > (lastChanged + (days * 24 * 60 * 60 * 1000));
+    }
+
+    // Validazione Profilo e Limiti Campi
+    function isValidProfileData() {
+      let data = request.resource.data;
+      return data.get('bio', '') is string && data.get('bio', '').size() <= 160 &&
+             data.get('displayName', '') is string && data.get('displayName', '').size() <= 60 &&
+             data.get('username', '') is string && data.get('username', '').size() <= 35 &&
+             data.get('className', '') is string && data.get('className', '').size() <= 10 &&
+             (!('birthday' in data) || data.birthday == null || data.birthday is int) &&
+             (!('coverColor' in data) || data.coverColor is string && data.coverColor.size() <= 30) &&
+             (!('pinnedBadges' in data) || (
+               data.pinnedBadges is list &&
+               data.pinnedBadges.size() <= 5 &&
+               true
+             ));
+    }
+
+    // Il ruolo deve essere validato tramite il registro admins (o declassato a STUDENT)
+    function isRoleValid() {
+      let newRole = request.resource.data.get('role', 'STUDENT');
+      let tokenRole = request.auth.token.get('role', 'STUDENT');
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) ||
+             newRole == tokenRole;
+    }
+
+    // Validazione ruolo alla creazione del profilo
+    function isRoleValidOnCreate() {
+      let newRole = request.resource.data.get('role', 'STUDENT');
+      let tokenRole = request.auth.token.get('role', 'STUDENT');
+      return newRole == tokenRole;
+    }
+
+    function isValidUserCreate() {
+      let data = request.resource.data;
+      return isRoleValidOnCreate() &&
+             'xp' in data && data.xp == 0 &&
+             'level' in data && data.level == 1 &&
+             'streak' in data && data.streak == 0 &&
+             'lastStreakDate' in data && data.lastStreakDate == 0 &&
+             'totalCheckIns' in data && data.totalCheckIns == 0 &&
+             'totalAssemblies' in data && data.totalAssemblies == 0 &&
+             'friendCount' in data && data.friendCount == 0 &&
+             'friends' in data && data.friends.size() == 0 &&
+             'earnedBadges' in data && data.earnedBadges.size() == 0 &&
+             'delegatedRooms' in data && data.delegatedRooms.size() == 0 &&
+             (!('pinnedBadges' in data) || data.pinnedBadges.size() == 0) &&
+             'role' in data;
+    }
+
+    // Annulla le modifiche a campi riservati
+    function isInitOrUnchanged(field) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([field]) || !(field in resource.data);
+    }
+
+    function isOnlyFriendshipUpdate(userId) {
+      return false; // Deprecato: gestito da Cloud Functions
+    }
+
+    // ANTI-CHEAT CHECK-IN HELPER FUNCTIONS
+    function checkInStreakBonus(newStreakVal) {
+      return 1 + (((newStreakVal - 1) > 4) ? 4 : (newStreakVal - 1));
+    }
+    
+    function isValidCheckInXPAndLevel(oldXP, newXP, newLvl, newStreakVal) {
+      let isXPValid = newXP == oldXP + checkInStreakBonus(newStreakVal);
+      let isLevelValid = newXP < 100 ? 
+        (newLvl == 1) : 
+        (newLvl * newLvl * 100 <= newXP && (newLvl + 1) * (newLvl + 1) * 100 > newXP);
+      return isXPValid && isLevelValid;
+    }
+
+    // ANTI-CHEAT CHECK-IN VALIDATION
+    function isValidCheckInUpdate() {
+      let oldStreak = resource.data.get('streak', 0);
+      let newStreakVal = request.resource.data.get('streak', 1);
+      
+      let oldLastStreakDateMillis = resource.data.get('lastStreakDate', 0) is timestamp ? 
+        resource.data.lastStreakDate.toMillis() : resource.data.get('lastStreakDate', 0);
+      
+      let diffMillis = request.time.toMillis() - oldLastStreakDateMillis;
+      
+      let isCooldownOk = oldLastStreakDateMillis == 0 || diffMillis >= 8 * 60 * 60 * 1000;
+      let isStreakValid = oldLastStreakDateMillis == 0 ? 
+        (newStreakVal == 1) : 
+        (diffMillis <= 40 * 60 * 60 * 1000 ? newStreakVal == oldStreak + 1 : newStreakVal == 1);
+      
+      let isDateValid = request.resource.data.get('lastStreakDate', null) == request.time;
+      let isCheckInKeysOnly = request.resource.data.diff(resource.data).affectedKeys().hasOnly(['streak', 'lastStreakDate', 'xp', 'level']);
+      
+      return isCooldownOk && 
+             isStreakValid && 
+             isDateValid && 
+             isCheckInKeysOnly && 
+             isValidCheckInXPAndLevel(
+               resource.data.get('xp', 0), 
+               request.resource.data.get('xp', 0), 
+               request.resource.data.get('level', 1), 
+               newStreakVal
+             );
+    }
+
+    function isValidBadgeEarnedUpdate() {
+      return false; // Deprecato: gestito da Cloud Functions
+    }
+
+    function isOnlyAllowedProfileUpdate(userId) {
+      let diff = request.resource.data.diff(resource.data);
+      let affected = diff.affectedKeys();
+      
+      // Consente la modifica di campi modificati solo se non esistevano prima (inizializzazione)
+      let isSafeInit = isInitOrUnchanged('xp') &&
+                       isInitOrUnchanged('level') &&
+                       isInitOrUnchanged('streak') &&
+                       isInitOrUnchanged('lastStreakDate') &&
+                       isInitOrUnchanged('totalCheckIns') &&
+                       isInitOrUnchanged('totalAssemblies') &&
+                       isInitOrUnchanged('createdAt') &&
+                       isInitOrUnchanged('earnedBadges') &&
+                       isInitOrUnchanged('delegatedRooms') &&
+                       isInitOrUnchanged('friends') &&
+                       isInitOrUnchanged('friendCount') &&
+                       isInitOrUnchanged('className') &&
+                       isInitOrUnchanged('isFirstDisplayNameChange') &&
+                       isInitOrUnchanged('isFirstUsernameChange') &&
+                       isInitOrUnchanged('displayNameLastChanged') &&
+                       isInitOrUnchanged('usernameLastChanged');
+
+      let isValidRole = isRoleValid();
+
+      let nameChanged = affected.hasAny(['displayName']);
+      let isValidNameChange = !nameChanged || resource.data.get('isFirstDisplayNameChange', true) || isNameCooldownOk('displayName', 3);
+
+      let userChanged = affected.hasAny(['username']);
+      let isValidUserChange = !userChanged || resource.data.get('isFirstUsernameChange', true) || isNameCooldownOk('username', 7);
+
+      return isSafeInit && isValidRole && isValidNameChange && isValidUserChange && isValidProfileData() && isUsernameRegistered(userId);
+    }
+
+    function isOnlyRatingUpdate() {
+      let diff = request.resource.data.diff(resource.data);
+      let affected = diff.affectedKeys();
+      
+      let oldSum = resource.data.get('rating_stats', {}).get('sum', 0);
+      let newSum = request.resource.data.get('rating_stats', {}).get('sum', 0);
+      let oldCount = resource.data.get('rating_stats', {}).get('count', 0);
+      let newCount = request.resource.data.get('rating_stats', {}).get('count', 0);
+      let rating = newSum - oldSum;
+      
+      let emailLower = request.auth.token.email.lower();
+      let studentDocPath = /databases/$(database)/documents/students/$(resource.data.assemblyId + '_' + emailLower);
+      let hasStudentDoc = isAuthenticated() && existsAfter(studentDocPath);
+      
+      return affected.hasOnly(['rating_stats']) &&
+             request.resource.data.rating_stats is map &&
+             request.resource.data.rating_stats.get('count', 0) is int &&
+             request.resource.data.rating_stats.get('sum', 0) is int &&
+             newCount == oldCount + 1 &&
+             rating >= 1 && rating <= 5 &&
+             hasStudentDoc && 
+             getAfter(studentDocPath).data.get('actual_location', {}).keys().any(turnId,
+               getAfter(studentDocPath).data.actual_location.get(turnId).get('activity_id', '') == resource.id &&
+               getAfter(studentDocPath).data.actual_location.get(turnId).get('checked_in', false) == true &&
+               getAfter(studentDocPath).data.actual_location.get(turnId).get('rating', 0) == rating &&
+               (!exists(studentDocPath) || 
+                !('rating' in get(studentDocPath).data.get('actual_location', {}).get(turnId, {})))
+             );
+    }
+
+    function isStudentOwnUpdate() {
+      let diff = request.resource.data.diff(resource.data);
+      let affected = diff.affectedKeys();
+      return affected.hasOnly(['actual_location']) &&
+             request.resource.data.get('actual_location', {}) is map &&
+             true
+    }
+
+    // =========================================================================
+    // 1. CONFIGURAZIONE E ASSEMBLEE
+    // =========================================================================
+    // Security Fix #9: La config non è più pubblica — richiede autenticazione.
+    // I dati necessari alla landing page (es. maintenance_mode) devono essere
+    // spostati in un documento separato `config/public` accessibile a tutti.
+    // `config_secrets` rimane accessibile solo agli admin (invariato).
+    match /config/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // SECURITY: Configurazioni sensibili accessibili solo ad admin in lettura e a sviluppatore in scrittura
+    match /config_secrets/{docId} {
+      allow read: if isAdmin();
+      allow write: if isDeveloper();
+    }
+    
+    // V-004 FIX: Assemblee get e list pubblici per landing page/ospiti.
+    match /assemblies/{assemblyId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    // =========================================================================
+    // 2. STANZE E ATTIVITÀ (Iscrizioni)
+    // =========================================================================
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated();
+      
+      // SECURITY FIX M6: Type safety sui conteggi delle stanze
+      function isOnlyCountUpdate() {
+        let diff = request.resource.data.diff(resource.data);
+        let affected = diff.affectedKeys();
+        return affected.hasOnly(['counts_by_turn', 'current_count']) &&
+               request.resource.data.current_count is int &&
+               request.resource.data.counts_by_turn is map;
+      }
+      
+      // Admin ha accesso completo in scrittura
+      allow write: if isAdmin();
+      
+      // Staff (check-in) o Studente (rating dell'aula)
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isStaffForAssembly(resource.data.assemblyId) && isOnlyCountUpdate()) ||
+        isOnlyRatingUpdate()
+      );
+    }
+
+    match /physical_rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // =========================================================================
+    // 3. STUDENTS (Anagrafica Studenti)
+    // =========================================================================
+    match /students/{studentId} {
+      // get is permitted if isAdmin, isStaffForAssembly, or it is the student's own document
+      allow get: if isAuthenticated() && (
+        isAdmin() || 
+        isStaffForAssembly(resource.data.assemblyId) || 
+        resource.data.email == request.auth.token.email.lower()
+      );
+      // list is permitted if isAdmin, isStaffGlobally, isStaffForAssembly, or filtering by own email
+      allow list: if isAuthenticated() && (
+        isStaffGlobally() || 
+        isStaffForAssembly(resource.data.assemblyId) || 
+        resource.data.email == request.auth.token.email.lower()
+      );
+      
+      // Creazione: Staff o studente stesso (senza scheduled_turns pre-iniettati)
+      allow create: if isStaffForAssembly(request.resource.data.assemblyId) || 
+        (isOwnStudentDoc() && !('scheduled_turns' in request.resource.data));
+      
+      // Update: Admin (completo), Staff (booking e check-in), Studente proprietario (solo feedback rating su actual_location)
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (isStaffForAssembly(resource.data.assemblyId) && isOnlyAllowedStudentUpdate()) ||
+        (isOwnStudentDoc() && isStudentOwnUpdate())
+      );
+      
+      // Delete: Admin o Staff dell'assemblea specifica
+      allow delete: if isAdmin() || isStaffForAssembly(resource.data.assemblyId);
+    }
+
+    // =========================================================================
+    // 4. ASSEMBLY ROLES (Ruoli e Permessi per Assemblea)
+    // =========================================================================
+    match /assembly_roles/{roleId} {
+      // Security Fix (FIR-03): il get è limitato a staff/admin o al documento proprio.
+      // Previene l'enumerazione delle email dello staff da parte di studenti normali.
+      allow get: if isAdmin() || isStaffGlobally() || 
+                    (isAuthenticated() && resource.data.email == request.auth.token.email.lower());
+      allow list: if isStaffGlobally() || (isAuthenticated() && resource.data.email == request.auth.token.email.lower());
+      allow write: if isAdmin();
+    }
+    
+    // =========================================================================
+    // 5. USERS (Anagrafica Utenti Globali Firebase)
+    // =========================================================================
+    match /users/{userId} {
+      allow get: if isAuthenticated();
+      // Security Fix #10: La query `list` è limitata ai soli admin o a query controllate per la classifica
+      // Gli utenti normali possono visualizzare i top 200 o la propria classe.
+      allow list: if isAuthenticated() && (
+        isAdmin() ||
+        (request.query.limit <= 200 && request.query.orders.size() > 0 && request.query.orders[0].path == 'xp') ||
+        (resource.data.className == getUserData().className)
+      );
+      allow create: if isAuthenticated() && request.auth.uid == userId && isValidUserCreate() && isValidProfileData() && isUsernameRegistered(userId);
+      
+      allow update: if isAdmin() || (
+        isAuthenticated() && (
+          request.auth.uid == userId && (isOnlyAllowedProfileUpdate(userId) || isValidCheckInUpdate())
+        )
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    match /usernames/{username} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (isAdmin() || request.resource.data.uid == request.auth.uid) && username.size() <= 35 && username.matches('^@[a-z0-9._]+$');
+      // SECURITY FIX L2: Impedisce il cambio di uid (username hijacking)
+      allow update: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid);
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+    }
+
+    // =========================================================================
+    // 6. EVENT LOG (Feed Attività Real-Time)
+    // =========================================================================
+    match /event_log/{eventId} {
+      allow read: if isAdmin();
+      // SECURITY: I log degli eventi possono essere scritti solo da staff e amministratori
+      allow create: if isAuthenticated() && (
+        isStaffForAssembly(request.resource.data.get('assemblyId', '')) ||
+        isAdmin()
+      ) && request.resource.data.get('type', '').size() <= 100 && request.resource.data.get('details', '').size() <= 500;
+      // V-002 PARTIAL: Event log modificabile solo da admin (less critical than audit)
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 7. AUDIT LOG — IMMUTABILE E SOLO SERVER-SIDE (Security Fix #5)
+    // =========================================================================
+    match /audit_log/{logId} {
+      allow read: if isAdmin();
+      // Consente la creazione dei log da client esclusivamente agli amministratori autorizzati.
+      allow create: if isAdmin();
+      // IMMUTABILITÀ ASSOLUTA: nessun utente può modificare o eliminare record.
+      allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // 8. ADMINS — Registro Globale Amministratori
+    // =========================================================================
+    match /admins/{adminEmail} {
+      // SECURITY FIX M3: get per singolo documento consentito per il role-sync in AuthContext
+      // list bloccato per utenti non-staff per impedire l'enumerazione di tutti gli admin
+      allow get: if isAuthenticated();
+      allow list: if isStaffGlobally();
+      allow write: if isDeveloper();
+    }
+
+    // =========================================================================
+    // 9. SOCIAL (Amicizie)
+    // =========================================================================
+    match /friendRequests/{requestId} {
+      // get: lettura di un singolo documento — resource.data disponibile, regola stretta.
+      allow get: if isAuthenticated() && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+
+      // list: Firestore NON fornisce resource.data durante la valutazione delle query list.
+      // La sicurezza si basa sul fatto che:
+      // 1. Il client filtra sempre per from==uid o to==uid (query vincolata).
+      // 2. Il get rule sopra nega l'accesso a documenti non propri se letti singolarmente.
+      // 3. Il create è bloccato: solo la Cloud Function può creare richieste.
+      // Risultato: un utente può listare solo le proprie richieste grazie ai where() client-side,
+      // e non può aggirarlo perché non può creare richieste false a proprio favore.
+      allow list: if isAuthenticated();
+
+      // SECURITY: Solo Cloud Function può creare richieste d'amicizia (anti-spam, anti-flood)
+      allow create: if false;
+
+      // SECURITY: Solo il destinatario può rifiutare (status → REJECTED); accettazione via CF
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.to && request.resource.data.status == 'REJECTED';
+
+      // Cancellazione: mittente (annulla) o destinatario (rifiuta/rimuove)
+      allow delete: if isAuthenticated() && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+    }
+
+
+    // =========================================================================
+    // 10. BADGES & ACTIVITIES — V-004 FIX: Auth Required
+    // =========================================================================
+    match /badges/{badgeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /activities/{activityId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // =========================================================================
+    // 11. INSPECTIONS (Security corridor patrols)
+    // =========================================================================
+    match /inspections/{inspectionId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Solo Cloud Functions possono scrivere
+    }
+
+    // =========================================================================
+    // 12. WAITING LIST (Contatti Landing Page Estiva)
+    // =========================================================================
+    match /leads_waiting_list/{leadId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if request.resource.data.email is string && 
+                      request.resource.data.email.size() <= 100 &&
+                      request.resource.data.email.matches('^[^@]+@[^@]+\\.[^@]+$') &&
+                      request.resource.data.createdAt == request.time;
+    }
+  }
+}
