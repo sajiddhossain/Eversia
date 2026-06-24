@@ -23,6 +23,9 @@
 
 Eversia sostituisce i processi manuali con un'architettura Cloud Native moderna, un'interfaccia utente immersiva e un'esperienza ottimizzata per gli studenti e per il corpo docenti.
 
+> ⚠️ **Development Status: Active Refactoring**  
+> Eversia è stato sviluppato e testato con successo sul campo in un contesto istituzionale reale. La codebase è attualmente in fase di refactoring per ottimizzare l'architettura serverless, migliorare la modularità dei componenti e predisporre la piattaforma a una distribuzione su larga scala.
+
 ### 👥 1. Per gli Studenti: Partecipazione Trasparente e Intuitiva
 Abbiamo unito la produttività di una **Agenda Digitale Real-Time** con dinamiche strutturate per incentivare il coinvolgimento:
 * 📅 **Prenotazione Istantanea**: Selezione rapida delle stanze a tema e dei dibattiti dell'assemblea prima dell'evento.
