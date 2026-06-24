@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="./docs/assets/logo-placeholder.png" alt="Eversia Logo" width="200"/>
 
   # Eversia 🧬
 
