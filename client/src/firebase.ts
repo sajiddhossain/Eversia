@@ -24,7 +24,7 @@ export const functions = getFunctions(app, 'europe-west1');
 // nell'hostname (ngrok, localtunnel, ecc.) che potrebbe attivarsi accidentalmente
 // su deployment pubblici. Ora si usa esclusivamente una variabile d'ambiente esplicita.
 // Per abilitare l'emulatore in locale: VITE_USE_EMULATOR=true nel tuo .env.local
-const useEmulator = import.meta.env.VITE_USE_EMULATOR === 'true';
+const useEmulator = import.meta.env.VITE_USE_EMULATOR === 'true' && import.meta.env.DEV;
 
 if (useEmulator) {
     const isStandardLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";

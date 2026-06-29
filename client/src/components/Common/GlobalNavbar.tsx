@@ -384,7 +384,7 @@ export const GlobalNavbar: React.FC<GlobalNavbarProps> = ({ onSecretTrigger }) =
                             <motion.div
                                 layoutId="desktop-nav-pill"
                                 className="absolute inset-0 bg-brand-lime rounded-xl -z-10 shadow-[0_0_20px_rgba(226,243,60,0.35)]"
-                                transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                                transition={{ type: 'tween', ease: 'easeOut', duration: 0.25 }}
                             />
                         )}
                         <item.icon className={`w-3.5 h-3.5 ${item.active ? 'stroke-[2.5]' : ''}`} />

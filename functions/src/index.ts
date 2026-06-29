@@ -741,30 +741,7 @@ const SearchUsersSchema = z.object({
 
 export const searchUsers = onCall({ region: 'europe-west1', enforceAppCheck }, async (request) => {
     const { data } = request;
-    console.log("[searchUsers] DEBUG START");
-    console.log("[searchUsers] request.auth is:", JSON.stringify(request.auth));
-    console.log("[searchUsers] rawRequest headers authorization:", request.rawRequest?.headers?.authorization);
-    
-    // Riconciliazione Auth locale/produzione: se siamo nell'emulatore locale ma il client
-    // usa la produzione, l'emulatore potrebbe non decodificare automaticamente l'ID token.
-    // In tal caso, lo verifichiamo manualmente tramite l'Admin SDK.
-    let auth: any = request.auth;
-    if (!auth && request.rawRequest?.headers?.authorization) {
-        const authHeader = request.rawRequest.headers.authorization;
-        if (authHeader.startsWith("Bearer ")) {
-            const token = authHeader.substring(7);
-            try {
-                const decodedToken = await admin.auth().verifyIdToken(token);
-                auth = {
-                    uid: decodedToken.uid,
-                    token: decodedToken
-                };
-                console.log(`[searchUsers] Token di produzione verificato manualmente. UID: ${auth.uid}`);
-            } catch (err) {
-                console.error("[searchUsers] Errore nella verifica manuale del token:", err);
-            }
-        }
-    }
+    const auth = await resolveAuth(request);
 
     if (!auth) {
         throw new HttpsError("unauthenticated", "Devi effettuare l'accesso.");
@@ -787,10 +764,8 @@ export const searchUsers = onCall({ region: 'europe-west1', enforceAppCheck }, a
     let isStaffOrAdmin = false;
 
     const callerRoleFromToken = auth.token.role || 'STUDENT';
-    console.log(`[searchUsers] Caller UID: ${callerUid}, Email: ${callerEmail}, Token role: ${callerRoleFromToken}`);
 
     if (['ADMIN', 'SVILUPPATORE', 'ROOM_MANAGER', 'SECURITY', 'STAFF'].includes(callerRoleFromToken)) {
-        console.log(`[searchUsers] User authorized as staff/admin via token role: ${callerRoleFromToken}`);
         isStaffOrAdmin = true;
     } else {
         const callerSnap = await db.doc(`users/${callerUid}`).get();
@@ -798,27 +773,18 @@ export const searchUsers = onCall({ region: 'europe-west1', enforceAppCheck }, a
             const callerData = callerSnap.data();
             const role = callerData?.role || 'STUDENT';
             const hasDelegated = (callerData?.delegatedRooms || []).length > 0;
-            console.log(`[searchUsers] Read user doc for ${callerUid}. Role: ${role}, hasDelegatedRooms: ${hasDelegated}`);
             if (['ADMIN', 'SVILUPPATORE', 'ROOM_MANAGER', 'SECURITY', 'STAFF'].includes(role) || hasDelegated) {
-                console.log(`[searchUsers] User authorized as staff/admin via Firestore user doc role: ${role} or delegated rooms.`);
                 isStaffOrAdmin = true;
             }
-        } else {
-            console.log(`[searchUsers] Firestore user doc for ${callerUid} does not exist!`);
         }
     }
 
     if (!isStaffOrAdmin && callerEmail) {
         const rolesSnap = await db.collection('assembly_roles').where('email', '==', callerEmail).limit(1).get();
         if (!rolesSnap.empty) {
-            console.log(`[searchUsers] User authorized as staff/admin via assembly_roles matching email: ${callerEmail}`);
             isStaffOrAdmin = true;
-        } else {
-            console.log(`[searchUsers] No matching email found in assembly_roles for: ${callerEmail}`);
         }
     }
-
-    console.log(`[searchUsers] Final authorization status (isStaffOrAdmin): ${isStaffOrAdmin}`);
 
     const usersRef = db.collection('users');
 
